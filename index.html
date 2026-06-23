@@ -106,6 +106,18 @@ body {
   gap: 16px;
   margin-bottom: 32px;
 }
+
+@media (max-width: 768px) {
+  .main { padding: 20px 16px 40px; }
+  .kpi-row { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .kpi-card { padding: 14px 16px; }
+  .kpi-value { font-size: 24px; }
+  .kpi-label { font-size: 9px; }
+  .grid-main { grid-template-columns: 1fr !important; }
+  .grid-bottom { grid-template-columns: 1fr !important; }
+  .topbar { padding: 12px 16px; flex-wrap: wrap; gap: 8px; }
+  .card { padding: 16px; }
+}
 .kpi-card {
   background: var(--card);
   border: 1px solid var(--border);
