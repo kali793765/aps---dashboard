@@ -368,19 +368,26 @@ if(Object.keys(manualData).length) applyManualData(manualData);
 async function syncFromSharePoint(){
   try{
     setSyncBar('syncing','⟳ Syncing with SharePoint...');
+    const H = {credentials:'include',headers:{'Accept':'application/json;odata=verbose'}};
+
+    // Load clients sequentially with full error handling
+    let clients = [], projects = [];
     
-    const [clientsRes, projectsRes] = await Promise.all([
-      fetch(`${SITE}/_api/web/lists/getbytitle('APS Client Database')/items?$top=500`,
-        {credentials:'include',headers:{'Accept':'application/json;odata=verbose'}}),
-      fetch(`${SITE}/_api/web/lists/getbytitle('APS PROJECT REGISTRY')/items?$top=500`,
-        {credentials:'include',headers:{'Accept':'application/json;odata=verbose'}})
-    ]);
+    try {
+      const cr = await fetch(`${SITE}/_api/web/lists/getbytitle('APS Client Database')/items?$top=500`, H);
+      if (cr.ok) {
+        const cd = await cr.json();
+        clients = (cd && cd.d && cd.d.results) ? cd.d.results : [];
+      }
+    } catch(ce) { console.warn('Clients fetch error:', ce.message); }
 
-    if(!clientsRes.ok || !projectsRes.ok) throw new Error('API blocked');
-
-    const clientData = await clientsRes.json();
-    const projectData = await projectsRes.json();
-    const clients = clientData.d.results||[];
+    try {
+      const pr = await fetch(`${SITE}/_api/web/lists/getbytitle('APS PROJECT REGISTRY')/items?$top=500`, H);
+      if (pr.ok) {
+        const pd = await pr.json();
+        projects = (pd && pd.d && pd.d.results) ? pd.d.results : [];
+      }
+    } catch(pe) { console.warn('Projects fetch error:', pe.message); }
     const projects = projectData.d.results||[];
 
     // Auto-detect columns
