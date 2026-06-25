@@ -789,101 +789,169 @@ const d = new Date();
 document.getElementById('datechip').textContent =
   d.toLocaleDateString('en-GB', { weekday:'short', year:'numeric', month:'short', day:'numeric' });
 
+function set(id, val) { const el=document.getElementById(id); if(el) el.innerHTML=val; }
+
 async function spGet(url) {
   const r = await fetch(url, {
     credentials: 'include',
     headers: { 'Accept': 'application/json;odata=verbose' }
   });
-  if (!r.ok) throw new Error('SP ' + r.status);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
 
-function set(id, val) { const el=document.getElementById(id); if(el) el.innerHTML=val; }
+// Try to find the right field name from multiple possibilities
+function getField(item, ...names) {
+  for (const name of names) {
+    if (item[name] !== undefined && item[name] !== null) return item[name];
+  }
+  return null;
+}
 
 async function loadDashboardData() {
+  // Show loading state
+  set('kpi-active-projects', '— <span class="unit">loading</span>');
+  set('kpi-warm', '— <span class="unit">loading</span>');
+  set('kpi-revenue', 'KES — <span class="unit">loading</span>');
+  set('kpi-clients', '— <span class="unit">loading</span>');
+
+  // ── LOAD CLIENTS ──
   try {
-    // ── CLIENTS from APS Client Database ──
-    const clients = await spGet(
-      `${SITE}/_api/web/lists/getbytitle('APS Client Database')/items?$select=Title,Status,ClientType,Revenue,AmountPaid&$top=500`
+    // First get ALL fields to see what's available
+    const listInfo = await spGet(
+      `${SITE}/_api/web/lists/getbytitle('APS Client Database')/items?$top=500`
     );
-    const rows = clients.d.results || [];
+    const rows = listInfo.d.results || [];
 
-    // Separate real clients from leads
-    const realClients = rows.filter(c => ['Active','Completed'].includes(c.Status));
-    const activeClients = rows.filter(c => c.Status === 'Active');
-    const warmLeads = rows.filter(c => c.Status === 'Warm');
-    const completedClients = rows.filter(c => c.Status === 'Completed');
+    if (rows.length === 0) {
+      set('kpi-clients', '0 <span class="unit">clients</span>');
+      set('kpi-clients-sub', 'No clients in database yet');
+      set('kpi-warm', '0 <span class="unit">leads</span>');
+      set('kpi-revenue', 'KES 0 <span class="unit">earned</span>');
+      set('fin-completed-rev', 'KES 0');
+      set('fin-collected', 'KES 0');
+      set('fin-outstanding', 'KES 0');
+      set('fin-active-clients', '0');
+    } else {
+      // Auto-detect column names from first row
+      const sample = rows[0];
+      const keys = Object.keys(sample);
+      
+      // Find status column
+      const statusKey = keys.find(k => 
+        ['Status','Status0','status','ClientStatus','_Status'].includes(k) ||
+        k.toLowerCase().includes('status')
+      ) || 'Status';
+      
+      // Find revenue column  
+      const revenueKey = keys.find(k =>
+        ['Revenue','revenue','ContractValue','InvoiceValue'].includes(k)
+      ) || 'Revenue';
+      
+      // Find paid column
+      const paidKey = keys.find(k =>
+        ['AmountPaid','Paid','amountpaid','PaidAmount'].includes(k)
+      ) || 'AmountPaid';
 
-    // Revenue — completed jobs only (not leads)
-    const completedRevenue = completedClients.reduce((s,c)=>s+(parseFloat(c.Revenue)||0),0);
-    const totalCollected = realClients.reduce((s,c)=>s+(parseFloat(c.AmountPaid)||0),0);
-    const outstanding = realClients.reduce((s,c)=>s+((parseFloat(c.Revenue)||0)-(parseFloat(c.AmountPaid)||0)),0);
+      // Categorize clients
+      const getStatus = item => (item[statusKey]||'').toString().trim();
+      const completed = rows.filter(c => getStatus(c).toLowerCase().includes('complete'));
+      const active = rows.filter(c => getStatus(c).toLowerCase() === 'active');
+      const warm = rows.filter(c => getStatus(c).toLowerCase() === 'warm');
+      const realClients = [...active, ...completed];
 
-    // KPI cards
-    set('kpi-warm', warmLeads.length + ' <span class="unit">leads</span>');
-    set('kpi-warm-sub', warmLeads.map(c=>c.Title).slice(0,3).join(', ') || 'No warm leads');
-    set('kpi-revenue', 'KES ' + fmt(completedRevenue) + ' <span class="unit">earned</span>');
-    set('kpi-rev-sub', 'From ' + completedClients.length + ' completed job' + (completedClients.length!==1?'s':'') + ' only');
-    set('kpi-clients', realClients.length + ' <span class="unit">clients</span>');
-    set('kpi-clients-sub', activeClients.length + ' active · ' + completedClients.length + ' completed');
+      const completedRev = completed.reduce((s,c)=>s+(parseFloat(c[revenueKey])||0),0);
+      const totalPaid = realClients.reduce((s,c)=>s+(parseFloat(c[paidKey])||0),0);
+      const outstanding = realClients.reduce((s,c)=>s+((parseFloat(c[revenueKey])||0)-(parseFloat(c[paidKey])||0)),0);
 
-    // Financials
-    set('fin-completed-rev', 'KES ' + fmt(completedRevenue));
-    set('fin-collected', 'KES ' + fmt(totalCollected));
-    set('fin-outstanding', 'KES ' + fmt(outstanding));
-    set('fin-active-clients', activeClients.length);
+      set('kpi-warm', warm.length + ' <span class="unit">leads</span>');
+      set('kpi-warm-sub', warm.map(c=>c.Title||'').slice(0,3).join(', ') || 'No warm leads');
+      set('kpi-revenue', 'KES ' + fmt(completedRev) + ' <span class="unit">earned</span>');
+      set('kpi-rev-sub', 'From ' + completed.length + ' completed job' + (completed.length!==1?'s':''));
+      set('kpi-clients', realClients.length + ' <span class="unit">clients</span>');
+      set('kpi-clients-sub', active.length + ' active · ' + completed.length + ' completed');
+      set('fin-completed-rev', 'KES ' + fmt(completedRev));
+      set('fin-collected', 'KES ' + fmt(totalPaid));
+      set('fin-outstanding', 'KES ' + fmt(outstanding));
+      set('fin-active-clients', active.length);
 
-    // Revenue bar
-    const target = completedRevenue > 0 ? completedRevenue * 1.5 : 100000;
-    const pct = Math.min(Math.round(completedRevenue/target*100),100);
-    const barFill = document.getElementById('rev-bar-fill');
-    if(barFill) { barFill.style.width = pct+'%'; }
-    const revLabels = document.querySelectorAll('.rev-label span');
-    if(revLabels.length>=2) revLabels[1].textContent = pct + '% of target';
-
+      // Revenue bar
+      const target = Math.max(completedRev * 1.5, 100000);
+      const pct = Math.min(Math.round(completedRev/target*100), 100);
+      const barFill = document.getElementById('rev-bar-fill');
+      if(barFill) barFill.style.width = pct + '%';
+    }
   } catch(e) {
-    console.warn('Client data load failed:', e.message);
+    console.error('Client load error:', e);
+    set('kpi-clients', '<span style="color:var(--danger);font-size:14px">!</span>');
+    set('kpi-clients-sub', 'Load failed — check console');
+    set('kpi-warm', '—');
+    set('kpi-revenue', 'KES —');
+    set('fin-completed-rev', 'Error: ' + e.message);
   }
 
+  // ── LOAD PROJECTS ──
   try {
-    // ── PROJECTS from APS PROJECT REGISTRY ──
-    const projects = await spGet(
-      `${SITE}/_api/web/lists/getbytitle('APS PROJECT REGISTRY')/items?$select=Title,Status0,Phase,Priority&$top=500`
+    const projData = await spGet(
+      `${SITE}/_api/web/lists/getbytitle('APS PROJECT REGISTRY')/items?$top=500`
     );
-    const projs = projects.d.results || [];
-    const activeProjs = projs.filter(p => p.Status0 === 'ACTIVE' || p.Status0 === 'Active');
+    const projs = projData.d.results || [];
 
-    set('kpi-active-projects', activeProjs.length + ' <span class="unit">/ ' + projs.length + '</span>');
-    set('kpi-active-sub', activeProjs.length > 0
-      ? '<span class="up">' + activeProjs.map(p=>p.Title).join(', ') + '</span>'
-      : 'No active projects');
+    if (projs.length > 0) {
+      const sample = projs[0];
+      const keys = Object.keys(sample);
+      
+      // Find status column in projects
+      const statusKey = keys.find(k =>
+        ['Status','Status0','ProjectStatus','status'].includes(k) ||
+        (k.toLowerCase().includes('status') && !k.includes('OData'))
+      ) || 'Status0';
 
-    // Update project cards in registry section
-    const projContainer = document.querySelector('.project-list');
-    if(projContainer && projs.length) {
-      const statusColor = s => ({ACTIVE:'badge-active',WARM:'badge-warm',DORMANT:'badge-dormant'})[s]||'badge-warm';
-      const phaseColor = p => ({Scale:'badge-phase',Build:'badge-phase',Idea:'badge-dormant'})[p]||'badge-phase';
+      const phaseKey = keys.find(k =>
+        ['Phase','phase','ProjectPhase'].includes(k)
+      ) || 'Phase';
 
-      const top4 = projs.slice(0,4);
-      projContainer.innerHTML = top4.map(p => `
-        <div class="project-item">
-          <div class="proj-top">
-            <div>
-              <div class="proj-name">${p.Title}</div>
-              <div class="proj-cat">Priority ${p.Priority||'—'}</div>
+      const getStatus = p => (p[statusKey]||'').toString().toUpperCase().trim();
+      const activeProjs = projs.filter(p => getStatus(p).includes('ACTIVE'));
+
+      set('kpi-active-projects', activeProjs.length + ' <span class="unit">/ ' + projs.length + '</span>');
+      set('kpi-active-sub', activeProjs.length > 0
+        ? '<span class="up">' + activeProjs.map(p=>p.Title).join(', ') + '</span>'
+        : 'No active projects');
+
+      // Update project cards
+      const projContainer = document.querySelector('.project-list');
+      if(projContainer) {
+        const statusBadge = s => {
+          const su = (s||'').toUpperCase();
+          if(su.includes('ACTIVE')) return 'badge-active';
+          if(su.includes('WARM')) return 'badge-warm';
+          return 'badge-dormant';
+        };
+        const top4 = projs.slice(0,4);
+        projContainer.innerHTML = top4.map(p => `
+          <div class="project-item">
+            <div class="proj-top">
+              <div>
+                <div class="proj-name">${p.Title||'—'}</div>
+                <div class="proj-cat">${p[phaseKey]||'—'} Phase</div>
+              </div>
+              <div class="badges">
+                <span class="badge ${statusBadge(p[statusKey])}">${p[statusKey]||'—'}</span>
+                <span class="badge badge-phase">${p[phaseKey]||'—'}</span>
+              </div>
             </div>
-            <div class="badges">
-              <span class="badge ${statusColor(p.Status0)}">${p.Status0||'—'}</span>
-              <span class="badge badge-phase">${p.Phase||'—'}</span>
-            </div>
-          </div>
-        </div>`).join('') + (projs.length > 4 ? `<div style="font-size:11px;color:var(--dim);padding:8px 0">+${projs.length-4} more projects</div>` : '');
+          </div>`).join('') +
+          (projs.length > 4 ? `<div style="font-size:11px;color:var(--dim);padding:8px 0">+${projs.length-4} more</div>` : '');
+      }
+    } else {
+      set('kpi-active-projects', '0 <span class="unit">projects</span>');
+      set('kpi-active-sub', 'No projects in registry');
     }
-
   } catch(e) {
-    console.warn('Project data load failed:', e.message);
+    console.error('Project load error:', e);
     set('kpi-active-projects', '— <span class="unit">projects</span>');
-    set('kpi-active-sub', 'Open Project Registry to view');
+    set('kpi-active-sub', 'Check Project Registry');
   }
 }
 
