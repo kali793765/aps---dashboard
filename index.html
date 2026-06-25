@@ -419,23 +419,23 @@ body {
   <div class="kpi-row">
     <div class="kpi-card" style="--accent-bar: #4caf74">
       <div class="kpi-label">Active Projects</div>
-      <div class="kpi-value">1 <span class="unit">/ 7</span></div>
-      <div class="kpi-sub"><span class="up">APS Core</span> · Scale Phase</div>
+      <div class="kpi-value" id="kpi-active-projects">— <span class="unit">loading</span></div>
+      <div class="kpi-sub" id="kpi-active-sub">Loading from SharePoint...</div>
     </div>
     <div class="kpi-card" style="--accent-bar: #e8a84c">
       <div class="kpi-label">Warm Pipeline</div>
-      <div class="kpi-value">3 <span class="unit">leads</span></div>
-      <div class="kpi-sub"><span class="warn">Omoka, C.K Fleet, Fulgents Post</span></div>
+      <div class="kpi-value" id="kpi-warm">— <span class="unit">leads</span></div>
+      <div class="kpi-sub" id="kpi-warm-sub">Loading...</div>
     </div>
     <div class="kpi-card" style="--accent-bar: #6fae7d">
-      <div class="kpi-label">Revenue (MTD)</div>
-      <div class="kpi-value">$0 <span class="unit">target</span></div>
-      <div class="kpi-sub">Update target · <span class="up">Building phase</span></div>
+      <div class="kpi-label">Revenue (KES)</div>
+      <div class="kpi-value" id="kpi-revenue">— <span class="unit">KES</span></div>
+      <div class="kpi-sub" id="kpi-rev-sub">From completed jobs only</div>
     </div>
     <div class="kpi-card" style="--accent-bar: #88a8e8">
-      <div class="kpi-label">Outstanding Tasks</div>
-      <div class="kpi-value">4 <span class="unit">today</span></div>
-      <div class="kpi-sub"><span class="warn">2 high priority</span></div>
+      <div class="kpi-label">Total Clients</div>
+      <div class="kpi-value" id="kpi-clients">— <span class="unit">clients</span></div>
+      <div class="kpi-sub" id="kpi-clients-sub">Active + Completed only</div>
     </div>
   </div>
 
@@ -559,9 +559,9 @@ body {
           <div class="fin-note">Invoices awaiting payment</div>
         </div>
         <div class="fin-item">
-          <div class="fin-label">Invoices Sent</div>
-          <div class="fin-val">0</div>
-          <div class="fin-note">This month</div>
+          <div class="fin-label">Active Clients</div>
+          <div class="fin-val" id="fin-active-clients">Loading...</div>
+          <div class="fin-note">Currently engaged</div>
         </div>
       </div>
 
@@ -781,32 +781,134 @@ body {
 </div>
 
 <script>
-  // Live date
-  const d = new Date();
-  document.getElementById('datechip').textContent =
-    d.toLocaleDateString('en-US', { weekday:'short', year:'numeric', month:'short', day:'numeric' });
+const SITE = 'https://audiopinesolutions902.sharepoint.com/sites/APSControlHub';
+const fmt = n => (parseFloat(n)||0).toLocaleString('en-KE');
 
-  // Task toggle
-  function toggleTask(el) {
-    el.classList.toggle('done');
+// Live date
+const d = new Date();
+document.getElementById('datechip').textContent =
+  d.toLocaleDateString('en-GB', { weekday:'short', year:'numeric', month:'short', day:'numeric' });
+
+async function spGet(url) {
+  const r = await fetch(url, {
+    credentials: 'include',
+    headers: { 'Accept': 'application/json;odata=verbose' }
+  });
+  if (!r.ok) throw new Error('SP ' + r.status);
+  return r.json();
+}
+
+function set(id, val) { const el=document.getElementById(id); if(el) el.innerHTML=val; }
+
+async function loadDashboardData() {
+  try {
+    // ── CLIENTS from APS Client Database ──
+    const clients = await spGet(
+      `${SITE}/_api/web/lists/getbytitle('APS Client Database')/items?$select=Title,Status,ClientType,Revenue,AmountPaid&$top=500`
+    );
+    const rows = clients.d.results || [];
+
+    // Separate real clients from leads
+    const realClients = rows.filter(c => ['Active','Completed'].includes(c.Status));
+    const activeClients = rows.filter(c => c.Status === 'Active');
+    const warmLeads = rows.filter(c => c.Status === 'Warm');
+    const completedClients = rows.filter(c => c.Status === 'Completed');
+
+    // Revenue — completed jobs only (not leads)
+    const completedRevenue = completedClients.reduce((s,c)=>s+(parseFloat(c.Revenue)||0),0);
+    const totalCollected = realClients.reduce((s,c)=>s+(parseFloat(c.AmountPaid)||0),0);
+    const outstanding = realClients.reduce((s,c)=>s+((parseFloat(c.Revenue)||0)-(parseFloat(c.AmountPaid)||0)),0);
+
+    // KPI cards
+    set('kpi-warm', warmLeads.length + ' <span class="unit">leads</span>');
+    set('kpi-warm-sub', warmLeads.map(c=>c.Title).slice(0,3).join(', ') || 'No warm leads');
+    set('kpi-revenue', 'KES ' + fmt(completedRevenue) + ' <span class="unit">earned</span>');
+    set('kpi-rev-sub', 'From ' + completedClients.length + ' completed job' + (completedClients.length!==1?'s':'') + ' only');
+    set('kpi-clients', realClients.length + ' <span class="unit">clients</span>');
+    set('kpi-clients-sub', activeClients.length + ' active · ' + completedClients.length + ' completed');
+
+    // Financials
+    set('fin-completed-rev', 'KES ' + fmt(completedRevenue));
+    set('fin-collected', 'KES ' + fmt(totalCollected));
+    set('fin-outstanding', 'KES ' + fmt(outstanding));
+    set('fin-active-clients', activeClients.length);
+
+    // Revenue bar
+    const target = completedRevenue > 0 ? completedRevenue * 1.5 : 100000;
+    const pct = Math.min(Math.round(completedRevenue/target*100),100);
+    const barFill = document.getElementById('rev-bar-fill');
+    if(barFill) { barFill.style.width = pct+'%'; }
+    const revLabels = document.querySelectorAll('.rev-label span');
+    if(revLabels.length>=2) revLabels[1].textContent = pct + '% of target';
+
+  } catch(e) {
+    console.warn('Client data load failed:', e.message);
   }
 
-  // Add task
-  function addTask() {
-    const text = prompt('New task:');
-    if (!text) return;
-    const list = document.getElementById('taskList');
-    const item = document.createElement('div');
-    item.className = 'task-item';
-    item.onclick = function() { toggleTask(this); };
-    item.innerHTML = `
-      <div class="task-check"></div>
-      <div class="task-body">
-        <div class="task-text">${text}</div>
-        <div class="task-meta"><span class="task-tag">Manual</span><span class="task-priority">Normal</span></div>
-      </div>`;
-    list.appendChild(item);
+  try {
+    // ── PROJECTS from APS PROJECT REGISTRY ──
+    const projects = await spGet(
+      `${SITE}/_api/web/lists/getbytitle('APS PROJECT REGISTRY')/items?$select=Title,Status0,Phase,Priority&$top=500`
+    );
+    const projs = projects.d.results || [];
+    const activeProjs = projs.filter(p => p.Status0 === 'ACTIVE' || p.Status0 === 'Active');
+
+    set('kpi-active-projects', activeProjs.length + ' <span class="unit">/ ' + projs.length + '</span>');
+    set('kpi-active-sub', activeProjs.length > 0
+      ? '<span class="up">' + activeProjs.map(p=>p.Title).join(', ') + '</span>'
+      : 'No active projects');
+
+    // Update project cards in registry section
+    const projContainer = document.querySelector('.project-list');
+    if(projContainer && projs.length) {
+      const statusColor = s => ({ACTIVE:'badge-active',WARM:'badge-warm',DORMANT:'badge-dormant'})[s]||'badge-warm';
+      const phaseColor = p => ({Scale:'badge-phase',Build:'badge-phase',Idea:'badge-dormant'})[p]||'badge-phase';
+
+      const top4 = projs.slice(0,4);
+      projContainer.innerHTML = top4.map(p => `
+        <div class="project-item">
+          <div class="proj-top">
+            <div>
+              <div class="proj-name">${p.Title}</div>
+              <div class="proj-cat">Priority ${p.Priority||'—'}</div>
+            </div>
+            <div class="badges">
+              <span class="badge ${statusColor(p.Status0)}">${p.Status0||'—'}</span>
+              <span class="badge badge-phase">${p.Phase||'—'}</span>
+            </div>
+          </div>
+        </div>`).join('') + (projs.length > 4 ? `<div style="font-size:11px;color:var(--dim);padding:8px 0">+${projs.length-4} more projects</div>` : '');
+    }
+
+  } catch(e) {
+    console.warn('Project data load failed:', e.message);
+    set('kpi-active-projects', '— <span class="unit">projects</span>');
+    set('kpi-active-sub', 'Open Project Registry to view');
   }
+}
+
+// Task toggle
+function toggleTask(el) { el.classList.toggle('done'); }
+
+// Add task
+function addTask() {
+  const text = prompt('New task:');
+  if (!text) return;
+  const list = document.getElementById('taskList');
+  const item = document.createElement('div');
+  item.className = 'task-item';
+  item.onclick = function() { toggleTask(this); };
+  item.innerHTML = `
+    <div class="task-check"></div>
+    <div class="task-body">
+      <div class="task-text">${text}</div>
+      <div class="task-meta"><span class="task-tag">Manual</span><span class="task-priority">Normal</span></div>
+    </div>`;
+  list.appendChild(item);
+}
+
+// Load on start
+window.onload = loadDashboardData;
 </script>
 
 </body>
